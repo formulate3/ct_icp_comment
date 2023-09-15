@@ -119,6 +119,7 @@ namespace ct_icp {
         }
 
         // -- Iterate over each dataset
+        //遍历数据集的不同sequence
         for (auto &next_sequence: all_sequences) {
             const SequenceInfo &seq_info = next_sequence->GetSequenceInfo();
             std::string seq_name = seq_info.label;
@@ -163,6 +164,7 @@ namespace ct_icp {
 #endif // CT_ICP_WITH_VIZ
 
             double sum_frame_time = 0.;
+            //遍历这个sequence的所有帧
             while (next_sequence->HasNext()) {
 
 #if CT_ICP_WITH_VIZ == 1
@@ -191,6 +193,7 @@ namespace ct_icp {
                 auto init_frame = std::chrono::steady_clock::now();
                 auto frame = next_sequence->NextFrame();
                 auto end_read_frame = std::chrono::steady_clock::now();
+                //非常重要的函数！！！！！！！！！！！！！！
                 summary = odometry.RegisterFrame(*(frame.pointcloud), frame_id);
                 auto end_registration_frame = std::chrono::steady_clock::now();
 

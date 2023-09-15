@@ -1033,7 +1033,7 @@ namespace ct_icp {
         auto raw_points = buffer_collection.element_proxy<Eigen::Vector3d>("raw_point");
         auto world_points = buffer_collection.element_proxy<Eigen::Vector3d>("world_point");
         auto timestamps = buffer_collection.property_proxy<double>("properties", "t");
-        SELECT_SOLVER
+        SELECT_SOLVER//非常重要核心的代码！！！！！！！
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */

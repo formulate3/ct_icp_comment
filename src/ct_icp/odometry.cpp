@@ -260,9 +260,12 @@ namespace ct_icp {
         auto pointcloud = slam::PointCloud::WrapVector(const_cast<std::vector<slam::WPoint3D> &>(frame),
                                                        slam::WPoint3D::DefaultSchema(), "raw_point");
         const auto view_timestamps = pointcloud.PropertyView<double>("xyzt", "t");
+        //1.计算这个激光点云的起始和结束的时间戳
         auto frame_info = compute_frame_info(view_timestamps, registered_frames_++);
+        //2.根据匀速模型计算得到当前帧启始和结束的位姿
         InitializeMotion(frame_info, nullptr);
         auto end_init = now();
+        //3.开始进行位姿的求解
         auto summary = DoRegister(pointcloud, frame_info, motion_model);
         auto end = now();
         summary.logged_values["odometry_total"] = duration_ms(end, start);
@@ -330,6 +333,7 @@ namespace ct_icp {
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
+    //Returns the set of selected keypoints sampled via grid sampling
     std::vector<slam::WPoint3D> Odometry::InitializeFrame(const slam::PointCloud &const_frame,
                                                           FrameInfo frame_info) {
         const auto view_timestamps = const_frame.TimestampsProxy<double>();
@@ -394,12 +398,13 @@ namespace ct_icp {
         const double kSizeVoxelMap = options_.size_voxel_map;
         const auto kIndexFrame = frame_info.registered_fid;
 
-
+        
+        //3.1 Returns the set of selected keypoints sampled via grid sampling
         auto frame = InitializeFrame(const_frame, frame_info);
 
 
         // LOG INITIALIZATION
-        LogInitialization(frame, frame_info, log_out_);
+        LogInitialization(frame, frame_info, log_out_);//小函数
 
         const auto initial_estimate = trajectory_.back();
         RegistrationSummary summary;
@@ -417,6 +422,7 @@ namespace ct_icp {
             }
 
             if (options_.robust_registration) {
+                //3.2 非常重要的函數！！！！！！！！！！！！！！！！！！！！！！！！！
                 RobustRegistration(frame, frame_info, summary, motion_model_ptr);
             } else {
                 double sample_voxel_size = kIndexFrame < options_.init_num_frames ?
@@ -459,6 +465,7 @@ namespace ct_icp {
 
 
         // Distort the Frame using the current estimate
+        //3.3 对点进行畸变矫正
         summary.corrected_points = frame;
         summary.all_corrected_points.resize(const_frame.size());
         auto raw_points_view = const_frame.XYZConst<double>();
@@ -486,7 +493,10 @@ namespace ct_icp {
         }
         auto end_transform = now();
         ComputeSummaryMetrics(summary, kIndexFrame);
+
+
         // Updates the Map
+        //3.4 更新地图
         UpdateMap(summary, kIndexFrame);
         IterateOverCallbacks(OdometryCallback::FINISHED_REGISTRATION,
                              frame, nullptr, &summary);
@@ -498,7 +508,7 @@ namespace ct_icp {
         summary.logged_values["odometry_map_update(ms)"] = duration_ms(end_map, end_transform);
         summary.logged_values["odometry_transform(ms)"] = duration_ms(end_transform, end);
         return summary;
-    }
+    }//end function Odometry::DoRegister
 
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -565,6 +575,7 @@ namespace ct_icp {
             }
 
             // Iterate over the callbacks with the keypoints
+            //好像是为了可视化用的
             IterateOverCallbacks(OdometryCallback::BEFORE_ITERATION,
                                  frame, &keypoints);
 
@@ -572,6 +583,7 @@ namespace ct_icp {
             ICPSummary icp_summary;
             CT_ICP_Registration registration;
             registration.Options() = options;
+            //最为重要的函数！！！
             registration_summary.icp_summary = registration.Register(*map_,
                                                                      keypoints,
                                                                      registration_summary.frame,
@@ -598,7 +610,7 @@ namespace ct_icp {
         }
 
         IterateOverCallbacks(OdometryCallback::ITERATION_COMPLETED, frame, &keypoints, nullptr);
-    }
+    }//end function TryRegister
 
 /* -------------------------------------------------------------------------------------------------------------- */
     bool Odometry::AssessRegistration(const std::vector<slam::WPoint3D> &points,
@@ -793,6 +805,7 @@ namespace ct_icp {
 
         do {
             auto start_ct_icp = std::chrono::steady_clock::now();
+            //1.
             TryRegister(frame, frame_info, attempt.registration_options,
                         attempt.summary, attempt.sample_voxel_size, motion_model);
 
@@ -819,7 +832,7 @@ namespace ct_icp {
 
             attempt.summary.relative_distance = (attempt.CurrentFrame().EndTr() -
                                                  attempt.CurrentFrame().BeginTr()).norm();
-
+            //2.
             good_enough_registration = AssessRegistration(frame, attempt.summary,
                                                           options_.debug_print ? log_out_ : nullptr);
             attempt.summary.number_of_attempts++;
