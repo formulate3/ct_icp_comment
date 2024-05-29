@@ -201,8 +201,10 @@ namespace ct_icp {
         auto start = now();
         CHECK(frame.HasTimestamps());
         const auto view_timestamps = frame.TimestampsProxy<double>();
+        ///compute_frame_info获得该帧激光点云的起始和结束的时间戳,以及记录帧数
         auto frame_info = compute_frame_info(view_timestamps, registered_frames_++);
         frame_info.frame_id = frame_id;
+        ///每来一帧，利用InitializeMotion对该帧的起始和终止位姿进行初始化
         InitializeMotion(frame_info, nullptr);
         auto end_init = now();
         auto summary = DoRegister(frame, frame_info, motion_model);
@@ -291,10 +293,11 @@ namespace ct_icp {
         trajectory_[kFrameIndex].begin_pose = Pose(SE3(), frame_info.begin_timestamp, frame_info.frame_id);
         trajectory_[kFrameIndex].end_pose = Pose(SE3(), frame_info.end_timestamp, frame_info.frame_id);
 
-        if (kFrameIndex <= 1) {
+        if (kFrameIndex <= 1) {//第一帧，均初始化为单位矩阵
             // Initialize first pose at Identity
 
-        } else if (kFrameIndex == 2) {
+        } else if (kFrameIndex == 2) {//第二帧有不同的策略
+            //等速模型
             if (options_.initialization == INIT_CONSTANT_VELOCITY) {
                 // Different regimen for the second frame due to the bootstrapped elasticity
                 trajectory_[kFrameIndex].begin_pose.pose = trajectory_[kFrameIndex - 1].end_pose.pose;
@@ -302,16 +305,18 @@ namespace ct_icp {
                                                          trajectory_[kFrameIndex - 2].end_pose.pose.Inverse() *
                                                          trajectory_[kFrameIndex - 1].end_pose.pose;
             } else {
+                ///为什么起始和终止位姿设为一致？？
                 // Important ! Start with a rigid frame and let the ICP distort it !
                 // It would make more sense to start
                 trajectory_[kFrameIndex].begin_pose.pose = trajectory_[kFrameIndex - 1].begin_pose.pose;
                 trajectory_[kFrameIndex].end_pose.pose = trajectory_[kFrameIndex].begin_pose.pose;
             }
-        } else {
+        } else {//第三帧开始的策略
             const auto &frame_m_1 = trajectory_[kFrameIndex - 1];
             const auto &frame_m_2 = trajectory_[kFrameIndex - 2];
 
             if (options_.initialization == INIT_CONSTANT_VELOCITY) {
+                //运动补偿的方式为连续，该帧的起始位姿根据前面起始位姿的变换矩阵推得
                 if (options_.motion_compensation == CONTINUOUS) {
                     // When continuous: use the previous begin_pose as reference
                     auto next_begin = frame_m_1.begin_pose.pose *
@@ -319,13 +324,16 @@ namespace ct_icp {
                                       frame_m_1.begin_pose.pose;
                     trajectory_[kFrameIndex].begin_pose.pose = next_begin;
                 } else {
+                    //不连续，该帧的起始位姿与上一帧的结束位姿一致
                     // When not continuous: set the new begin and previous end pose to be consistent
                     trajectory_[kFrameIndex].begin_pose.pose = frame_m_1.end_pose.pose;
                 }
+                //只要为等速模型，该帧的结束位姿由前面结束位姿的变换矩阵推得
                 trajectory_[kFrameIndex].end_pose.pose = trajectory_[kFrameIndex - 1].end_pose.pose *
                                                          trajectory_[kFrameIndex - 2].end_pose.pose.Inverse() *
                                                          trajectory_[kFrameIndex - 1].end_pose.pose;
             } else {
+                //不为等速模型，位姿设为和上一帧一致
                 trajectory_[kFrameIndex].begin_pose.pose = frame_m_1.end_pose.pose;
                 trajectory_[kFrameIndex].end_pose.pose = frame_m_1.end_pose.pose;
             }
@@ -340,8 +348,10 @@ namespace ct_icp {
         const auto view_xyz = const_frame.XYZConst<double>();
 
         /// PREPROCESS THE INITIAL FRAME
+        //前面的初始帧和后面的帧分别用不同的voxel size
         double sample_size = frame_info.registered_fid < options_.init_num_frames ?
                              options_.init_voxel_size : options_.voxel_size;
+        //该vector以这种形式保存该帧的每个点
         std::vector<slam::WPoint3D> frame(const_frame.size());
         for (auto i(0); i < frame.size(); ++i) {
             frame[i].raw_point.point = view_xyz[i];
@@ -350,24 +360,29 @@ namespace ct_icp {
             frame[i].index_frame = frame_info.frame_id;
         }
         const auto kIndexFrame = frame_info.registered_fid;
+        //shuffle随机打乱该vector中的每个点
         std::shuffle(frame.begin(), frame.end(), g_);
 
         //Subsample the scan with voxels taking one random in every voxel
+        //下采样，每个体素内保存一个随机点
         sub_sample_frame(frame, sample_size);
 
         // No elastic ICP for first frame because no initialization of ego-motion
+        //下采样后第一帧的每个点的时间戳设为该帧的结束时间戳
         if (kIndexFrame <= 1) {
             for (auto &point: frame) {
                 point.Timestamp() = frame_info.end_timestamp;
             }
         }
 
+        //对下采样后的点继续随机打乱
         std::shuffle(frame.begin(), frame.end(), g_);
 
         const auto &tr_frame = trajectory_[kIndexFrame];
         if (kIndexFrame > 1) {
             if (options_.motion_compensation == CONSTANT_VELOCITY) {
                 // The motion compensation of Constant velocity modifies the raw points of the point cloud
+                //利用slerp进行运动补偿
                 DistortFrame(frame, tr_frame.begin_pose, tr_frame.end_pose);
             }
         }
@@ -398,7 +413,7 @@ namespace ct_icp {
         const double kSizeVoxelMap = options_.size_voxel_map;
         const auto kIndexFrame = frame_info.registered_fid;
 
-        
+        //返回下采样打乱顺序且运动补偿后的vector
         //3.1 Returns the set of selected keypoints sampled via grid sampling
         auto frame = InitializeFrame(const_frame, frame_info);
 
@@ -406,6 +421,7 @@ namespace ct_icp {
         // LOG INITIALIZATION
         LogInitialization(frame, frame_info, log_out_);//小函数
 
+        //以轨迹最后一个作为初始猜测
         const auto initial_estimate = trajectory_.back();
         RegistrationSummary summary;
         summary.frame = initial_estimate;
@@ -414,6 +430,7 @@ namespace ct_icp {
 
         auto end_initialization = now();
         if (kIndexFrame > 0) {
+            //设置运动模型
             auto motion_model_ptr = motion_model;
             if (!motion_model && options_.with_default_motion_model) {
                 default_motion_model.GetOptions() = options_.default_motion_model;
@@ -545,8 +562,10 @@ namespace ct_icp {
         std::vector<slam::WPoint3D> keypoints;
 
         if (options_.sampling == sampling::GRID) {
+            //网格下采样
             grid_sampling(frame, keypoints, sample_voxel_size);
         } else if (options_.sampling == sampling::ADAPTIVE) {
+            //自适应下采样
             auto [begin, end] = slam::make_transform_collection(frame, slam::RawPointConversion());
             auto indices = ct_icp::AdaptiveSamplePointsInGrid(begin, end, options_.adaptive_options);
             keypoints.reserve(indices.size());
@@ -556,6 +575,7 @@ namespace ct_icp {
             keypoints = frame;
         }
 
+        //如果关键点的个数过多，随机重采样
         if (!kIsAtStartup && options_.max_num_keypoints > 0 && keypoints.size() > options_.max_num_keypoints) {
             std::shuffle(keypoints.begin(), keypoints.end(), g_);
             keypoints.resize(options_.max_num_keypoints);
@@ -811,6 +831,7 @@ namespace ct_icp {
 
             auto end_ct_icp = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed_icp = (end_ct_icp - start_ct_icp);
+            //配准后轨迹进行修改
             // Compute Modification of trajectory
             if (attempt.index_frame > 0) {
                 auto kIndexFrame = attempt.index_frame;
@@ -833,6 +854,7 @@ namespace ct_icp {
             attempt.summary.relative_distance = (attempt.CurrentFrame().EndTr() -
                                                  attempt.CurrentFrame().BeginTr()).norm();
             //2.
+            //评估配准结果
             good_enough_registration = AssessRegistration(frame, attempt.summary,
                                                           options_.debug_print ? log_out_ : nullptr);
             attempt.summary.number_of_attempts++;
